@@ -1,1 +1,1 @@
-54 : [Telink] Update Docker image (Zephyr update)
+60 : Add missing xz for esp32, upfate location of qemu-system-xtensa

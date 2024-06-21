@@ -244,10 +244,15 @@ public:
      * called yet, and neither callback will be called in the future.
      */
     CHIP_ERROR GetConnectedDevice(NodeId peerNodeId, Callback::Callback<OnDeviceConnected> * onConnection,
-                                  chip::Callback::Callback<OnDeviceConnectionFailure> * onFailure)
+                                  chip::Callback::Callback<OnDeviceConnectionFailure> * onFailure,
+                                  TransportPayloadCapability transportPayloadCapability = TransportPayloadCapability::kMRPPayload)
     {
         VerifyOrReturnError(mState == State::Initialized, CHIP_ERROR_INCORRECT_STATE);
-        mSystemState->CASESessionMgr()->FindOrEstablishSession(ScopedNodeId(peerNodeId, GetFabricIndex()), onConnection, onFailure);
+        mSystemState->CASESessionMgr()->FindOrEstablishSession(ScopedNodeId(peerNodeId, GetFabricIndex()), onConnection, onFailure,
+#if CHIP_DEVICE_CONFIG_ENABLE_AUTOMATIC_CASE_RETRIES
+                                                               1, nullptr,
+#endif // CHIP_DEVICE_CONFIG_ENABLE_AUTOMATIC_CASE_RETRIES
+                                                               transportPayloadCapability);
         return CHIP_NO_ERROR;
     }
 
@@ -267,11 +272,16 @@ public:
      */
     CHIP_ERROR
     GetConnectedDevice(NodeId peerNodeId, Callback::Callback<OnDeviceConnected> * onConnection,
-                       chip::Callback::Callback<OperationalSessionSetup::OnSetupFailure> * onSetupFailure)
+                       chip::Callback::Callback<OperationalSessionSetup::OnSetupFailure> * onSetupFailure,
+                       TransportPayloadCapability transportPayloadCapability = TransportPayloadCapability::kMRPPayload)
     {
         VerifyOrReturnError(mState == State::Initialized, CHIP_ERROR_INCORRECT_STATE);
         mSystemState->CASESessionMgr()->FindOrEstablishSession(ScopedNodeId(peerNodeId, GetFabricIndex()), onConnection,
-                                                               onSetupFailure);
+                                                               onSetupFailure,
+#if CHIP_DEVICE_CONFIG_ENABLE_AUTOMATIC_CASE_RETRIES
+                                                               1, nullptr,
+#endif // CHIP_DEVICE_CONFIG_ENABLE_AUTOMATIC_CASE_RETRIES
+                                                               transportPayloadCapability);
         return CHIP_NO_ERROR;
     }
 
@@ -375,7 +385,7 @@ public:
      * @param[in] noc                                NOC in CHIP certificate format.
      * @param[in] icac                               ICAC in CHIP certificate format. If no icac is present, an empty
      *                                               ByteSpan should be passed.
-     * @param[in] externalOperationalKeypair         External operational keypair. If null, use keypair in OperationalKeystore.
+     * @param[in] operationalKeypair                 External operational keypair. If null, use keypair in OperationalKeystore.
      * @param[in] operationalKeypairExternalOwned    If true, external operational keypair must outlive the fabric.
      *                                               If false, the keypair is copied and owned in heap of a FabricInfo.
      *

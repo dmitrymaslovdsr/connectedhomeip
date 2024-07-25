@@ -184,7 +184,7 @@ class BaseTestHelper:
                  keypair: p256keypair.P256Keypair = None):
         chip.native.Init()
 
-        self.chipStack = ChipStack('/tmp/repl_storage.json')
+        self.chipStack = ChipStack('/tmp/repl_storage.json', enableServerInteractions=True)
         self.certificateAuthorityManager = chip.CertificateAuthority.CertificateAuthorityManager(chipStack=self.chipStack)
         self.certificateAuthority = self.certificateAuthorityManager.NewCertificateAuthority()
         self.fabricAdmin = self.certificateAuthority.NewFabricAdmin(vendorId=0xFFF1, fabricId=1)
@@ -210,10 +210,10 @@ class BaseTestHelper:
             return None
         return ctypes.string_at(addrStrStorage).decode("utf-8")
 
-    def TestDiscovery(self, discriminator: int):
+    async def TestDiscovery(self, discriminator: int):
         self.logger.info(
             f"Discovering commissionable nodes with discriminator {discriminator}")
-        res = self.devCtrl.DiscoverCommissionableNodes(
+        res = await self.devCtrl.DiscoverCommissionableNodes(
             chip.discovery.FilterType.LONG_DISCRIMINATOR, discriminator, stopOnFirst=True, timeoutSecond=3)
         if not res:
             self.logger.info(
@@ -337,7 +337,7 @@ class BaseTestHelper:
 
     async def TestOnNetworkCommissioning(self, discriminator: int, setuppin: int, nodeid: int, ip_override: str = None):
         self.logger.info("Testing discovery")
-        device = self.TestDiscovery(discriminator=discriminator)
+        device = await self.TestDiscovery(discriminator=discriminator)
         if not device:
             self.logger.info("Failed to discover any devices.")
             return False
@@ -1156,6 +1156,24 @@ class BaseTestHelper:
             return True
         except Exception as ex:
             self.logger.exception("Failed to resolve. {}".format(ex))
+            return False
+
+    async def TestTriggerTestEventHandler(self, nodeid, enable_key, event_trigger):
+        self.logger.info("Test trigger test event handler for device = %08x", nodeid)
+        try:
+            await self.devCtrl.SendCommand(nodeid, 0, Clusters.GeneralDiagnostics.Commands.TestEventTrigger(enableKey=enable_key, eventTrigger=event_trigger))
+            return True
+        except Exception as ex:
+            self.logger.exception("Failed to trigger test event handler {}".format(ex))
+            return False
+
+    async def TestWaitForActive(self, nodeid):
+        self.logger.info("Test wait for device = %08x", nodeid)
+        try:
+            await self.devCtrl.WaitForActive(nodeid)
+            return True
+        except Exception as ex:
+            self.logger.exception("Failed to wait for active. {}".format(ex))
             return False
 
     async def TestReadBasicAttributes(self, nodeid: int, endpoint: int):

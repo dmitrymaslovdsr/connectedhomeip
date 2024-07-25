@@ -15,12 +15,17 @@
 #    limitations under the License.
 #
 
+# See https://github.com/project-chip/connectedhomeip/blob/master/docs/testing/python.md#defining-the-ci-test-arguments
+# for details about the block below.
+#
+# === BEGIN CI TEST ARGUMENTS ===
 # test-runner-runs: run1
 # test-runner-run/run1/app: ${ALL_CLUSTERS_APP}
 # test-runner-run/run1/factoryreset: True
 # test-runner-run/run1/quiet: True
 # test-runner-run/run1/app-args: --discriminator 1234 --KVS kvs1 --trace-to json:${TRACE_APP}.json
 # test-runner-run/run1/script-args: --storage-path admin_storage.json --commissioning-method on-network --discriminator 1234 --passcode 20202021 --trace-to json:${TRACE_TEST_JSON}.json --trace-to perfetto:${TRACE_TEST_PERFETTO}.perfetto
+# === END CI TEST ARGUMENTS ===
 
 import inspect
 import logging
@@ -202,7 +207,7 @@ class TC_IDM_1_2(MatterBaseTest):
         new_fabric_admin = new_certificate_authority.NewFabricAdmin(vendorId=0xFFF1, fabricId=self.matter_test_config.fabric_id + 1)
         TH2 = new_fabric_admin.NewController(nodeId=112233)
 
-        devices = TH2.DiscoverCommissionableNodes(
+        devices = await TH2.DiscoverCommissionableNodes(
             filterType=Discovery.FilterType.LONG_DISCRIMINATOR, filter=discriminator, stopOnFirst=False)
         # For some reason, the devices returned here aren't filtered, so filter ourselves
         device = next(filter(lambda d: d.commissioningMode == 2 and d.longDiscriminator == discriminator, devices))

@@ -24,7 +24,7 @@ import matter.tlv.TlvWriter
 
 class EcosystemInformationClusterEcosystemLocationStruct(
   val uniqueLocationID: String,
-  val locationDescriptor: EcosystemInformationClusterHomeLocationStruct,
+  val locationDescriptor: EcosystemInformationClusterLocationDescriptorStruct,
   val locationDescriptorLastEdit: ULong,
   val fabricIndex: UInt,
 ) {
@@ -40,7 +40,7 @@ class EcosystemInformationClusterEcosystemLocationStruct(
   fun toTlv(tlvTag: Tag, tlvWriter: TlvWriter) {
     tlvWriter.apply {
       startStructure(tlvTag)
-      put(ContextSpecificTag(TAG_UNIQUE_LOCATION_I_D), uniqueLocationID)
+      put(ContextSpecificTag(TAG_UNIQUE_LOCATION_ID), uniqueLocationID)
       locationDescriptor.toTlv(ContextSpecificTag(TAG_LOCATION_DESCRIPTOR), this)
       put(ContextSpecificTag(TAG_LOCATION_DESCRIPTOR_LAST_EDIT), locationDescriptorLastEdit)
       put(ContextSpecificTag(TAG_FABRIC_INDEX), fabricIndex)
@@ -49,7 +49,7 @@ class EcosystemInformationClusterEcosystemLocationStruct(
   }
 
   companion object {
-    private const val TAG_UNIQUE_LOCATION_I_D = 0
+    private const val TAG_UNIQUE_LOCATION_ID = 0
     private const val TAG_LOCATION_DESCRIPTOR = 1
     private const val TAG_LOCATION_DESCRIPTOR_LAST_EDIT = 2
     private const val TAG_FABRIC_INDEX = 254
@@ -59,9 +59,9 @@ class EcosystemInformationClusterEcosystemLocationStruct(
       tlvReader: TlvReader,
     ): EcosystemInformationClusterEcosystemLocationStruct {
       tlvReader.enterStructure(tlvTag)
-      val uniqueLocationID = tlvReader.getString(ContextSpecificTag(TAG_UNIQUE_LOCATION_I_D))
+      val uniqueLocationID = tlvReader.getString(ContextSpecificTag(TAG_UNIQUE_LOCATION_ID))
       val locationDescriptor =
-        EcosystemInformationClusterHomeLocationStruct.fromTlv(
+        EcosystemInformationClusterLocationDescriptorStruct.fromTlv(
           ContextSpecificTag(TAG_LOCATION_DESCRIPTOR),
           tlvReader,
         )

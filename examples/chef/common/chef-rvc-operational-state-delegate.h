@@ -21,6 +21,7 @@
 #include <app-common/zap-generated/cluster-objects.h>
 #include <app/clusters/operational-state-server/operational-state-server.h>
 
+#include <app/util/attribute-metadata.h>
 #include <protocols/interaction_model/StatusCode.h>
 
 #ifdef MATTER_DM_PLUGIN_RVC_OPERATIONAL_STATE_SERVER
@@ -95,7 +96,8 @@ public:
 
     uint32_t mRunningTime = 0;
     uint32_t mPausedTime  = 0;
-    app::DataModel::Nullable<uint32_t> mPhaseDuration;
+    app::DataModel::Nullable<uint32_t> mCountdownTime;
+    const uint32_t kExampleCountDown = 30;
 
 private:
     Span<const OperationalState::GenericOperationalState> mOperationalStateList;
@@ -119,6 +121,8 @@ void Shutdown();
 } // namespace Clusters
 } // namespace app
 } // namespace chip
+
+chip::app::Clusters::RvcOperationalState::RvcOperationalStateDelegate * getRvcOperationalStateDelegate();
 
 chip::Protocols::InteractionModel::Status chefRvcOperationalStateWriteCallback(chip::EndpointId endpoint, chip::ClusterId clusterId,
                                                                                const EmberAfAttributeMetadata * attributeMetadata,

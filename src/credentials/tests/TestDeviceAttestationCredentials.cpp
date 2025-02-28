@@ -25,6 +25,7 @@
 #include <credentials/DeviceAttestationCredsProvider.h>
 #include <credentials/attestation_verifier/DefaultDeviceAttestationVerifier.h>
 #include <credentials/attestation_verifier/DeviceAttestationVerifier.h>
+#include <credentials/attestation_verifier/TestDACRevocationDelegateImpl.h>
 #include <credentials/attestation_verifier/TestPAAStore.h>
 #include <credentials/examples/DeviceAttestationCredsExample.h>
 #include <credentials/examples/ExampleDACs.h>
@@ -36,6 +37,8 @@
 #include <lib/support/Span.h>
 
 #include "CHIPAttCert_test_vectors.h"
+
+#include <fstream>
 
 using namespace chip;
 using namespace chip::Crypto;
@@ -412,4 +415,216 @@ TEST_F(TestDeviceAttestationCredentials, TestAttestationTrustStore)
             EXPECT_TRUE(paaCertSpan.data_equal(testCase.expectedCertSpan));
         }
     }
+}
+
+TEST_F(TestDeviceAttestationCredentials, TestDACRevocationDelegateImpl)
+{
+    uint8_t attestationElementsTestVector[]  = { 0 };
+    uint8_t attestationChallengeTestVector[] = { 0 };
+    uint8_t attestationSignatureTestVector[] = { 0 };
+    uint8_t attestationNonceTestVector[]     = { 0 };
+
+    // Details for TestCerts::sTestCert_DAC_FFF1_8000_0004_Cert
+    //    Issuer: MEYxGDAWBgNVBAMMD01hdHRlciBUZXN0IFBBSTEUMBIGCisGAQQBgqJ8AgEMBEZGRjExFDASBgorBgEEAYKifAICDAQ4MDAw
+    //    AKID: AF42B7094DEBD515EC6ECF33B81115225F325288
+    //    Serial Number: 0C694F7F866067B2
+    //
+    // Details for TestCerts::sTestCert_PAI_FFF1_8000_Cert
+    //    Issuer: MDAxGDAWBgNVBAMMD01hdHRlciBUZXN0IFBBQTEUMBIGCisGAQQBgqJ8AgEMBEZGRjE=
+    //    AKID: 6AFD22771F511FECBF1641976710DCDC31A1717E
+    //    Serial Number: 3E6CE6509AD840CD1
+    Credentials::DeviceAttestationVerifier::AttestationInfo info(
+        ByteSpan(attestationElementsTestVector), ByteSpan(attestationChallengeTestVector), ByteSpan(attestationSignatureTestVector),
+        TestCerts::sTestCert_PAI_FFF1_8000_Cert, TestCerts::sTestCert_DAC_FFF1_8000_0004_Cert, ByteSpan(attestationNonceTestVector),
+        static_cast<VendorId>(0xFFF1), 0x8000);
+
+    AttestationVerificationResult attestationResult = AttestationVerificationResult::kNotImplemented;
+
+    Callback::Callback<DeviceAttestationVerifier::OnAttestationInformationVerification> attestationInformationVerificationCallback(
+        OnAttestationInformationVerificationCallback, &attestationResult);
+
+    TestDACRevocationDelegateImpl revocationDelegateImpl;
+
+    // Test without revocation data
+    revocationDelegateImpl.CheckForRevokedDACChain(info, &attestationInformationVerificationCallback);
+    EXPECT_EQ(attestationResult, AttestationVerificationResult::kSuccess);
+
+    // Test empty json
+    revocationDelegateImpl.SetDeviceAttestationRevocationData("");
+    revocationDelegateImpl.CheckForRevokedDACChain(info, &attestationInformationVerificationCallback);
+    revocationDelegateImpl.ClearDeviceAttestationRevocationData();
+    EXPECT_EQ(attestationResult, AttestationVerificationResult::kSuccess);
+
+    // Test DAC is revoked, crl signer is PAI itself
+    const char * jsonData = R"(
+    [{
+        "type": "revocation_set",
+        "issuer_subject_key_id": "AF42B7094DEBD515EC6ECF33B81115225F325288",
+        "issuer_name": "MEYxGDAWBgNVBAMMD01hdHRlciBUZXN0IFBBSTEUMBIGCisGAQQBgqJ8AgEMBEZGRjExFDASBgorBgEEAYKifAICDAQ4MDAw",
+        "crl_signer_cert": "MIIB1DCCAXqgAwIBAgIIPmzmUJrYQM0wCgYIKoZIzj0EAwIwMDEYMBYGA1UEAwwPTWF0dGVyIFRlc3QgUEFBMRQwEgYKKwYBBAGConwCAQwERkZGMTAgFw0yMTA2MjgxNDIzNDNaGA85OTk5MTIzMTIzNTk1OVowRjEYMBYGA1UEAwwPTWF0dGVyIFRlc3QgUEFJMRQwEgYKKwYBBAGConwCAQwERkZGMTEUMBIGCisGAQQBgqJ8AgIMBDgwMDAwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAASA3fEbIo8+MfY7z1eY2hRiOuu96C7zeO6tv7GP4avOMdCO1LIGBLbMxtm1+rZOfeEMt0vgF8nsFRYFbXDyzQsio2YwZDASBgNVHRMBAf8ECDAGAQH/AgEAMA4GA1UdDwEB/wQEAwIBBjAdBgNVHQ4EFgQUr0K3CU3r1RXsbs8zuBEVIl8yUogwHwYDVR0jBBgwFoAUav0idx9RH+y/FkGXZxDc3DGhcX4wCgYIKoZIzj0EAwIDSAAwRQIhAJbJyM8uAYhgBdj1vHLAe3X9mldpWsSRETETi+oDPOUDAiAlVJQ75X1T1sR199I+v8/CA2zSm6Y5PsfvrYcUq3GCGQ==",
+        "revoked_serial_numbers": ["0C694F7F866067B2"]
+    }]
+    )";
+    revocationDelegateImpl.SetDeviceAttestationRevocationData(jsonData);
+    revocationDelegateImpl.CheckForRevokedDACChain(info, &attestationInformationVerificationCallback);
+    revocationDelegateImpl.ClearDeviceAttestationRevocationData();
+    EXPECT_EQ(attestationResult, AttestationVerificationResult::kDacRevoked);
+
+    // Test PAI is revoked, crl signer is PAA itself
+    jsonData = R"(
+    [{
+        "type": "revocation_set",
+        "issuer_subject_key_id": "6AFD22771F511FECBF1641976710DCDC31A1717E",
+        "issuer_name": "MDAxGDAWBgNVBAMMD01hdHRlciBUZXN0IFBBQTEUMBIGCisGAQQBgqJ8AgEMBEZGRjE=",
+        "crl_signer_cert": "MIIBvTCCAWSgAwIBAgIITqjoMYLUHBwwCgYIKoZIzj0EAwIwMDEYMBYGA1UEAwwPTWF0dGVyIFRlc3QgUEFBMRQwEgYKKwYBBAGConwCAQwERkZGMTAgFw0yMTA2MjgxNDIzNDNaGA85OTk5MTIzMTIzNTk1OVowMDEYMBYGA1UEAwwPTWF0dGVyIFRlc3QgUEFBMRQwEgYKKwYBBAGConwCAQwERkZGMTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABLbLY3KIfyko9brIGqnZOuJDHK2p154kL2UXfvnO2TKijs0Duq9qj8oYShpQNUKWDUU/MD8fGUIddR6Pjxqam3WjZjBkMBIGA1UdEwEB/wQIMAYBAf8CAQEwDgYDVR0PAQH/BAQDAgEGMB0GA1UdDgQWBBRq/SJ3H1Ef7L8WQZdnENzcMaFxfjAfBgNVHSMEGDAWgBRq/SJ3H1Ef7L8WQZdnENzcMaFxfjAKBggqhkjOPQQDAgNHADBEAiBQqoAC9NkyqaAFOPZTaK0P/8jvu8m+t9pWmDXPmqdRDgIgI7rI/g8j51RFtlM5CBpHmUkpxyqvChVI1A0DTVFLJd4=",
+        "revoked_serial_numbers": ["3E6CE6509AD840CD"]
+    }]
+    )";
+    revocationDelegateImpl.SetDeviceAttestationRevocationData(jsonData);
+    revocationDelegateImpl.CheckForRevokedDACChain(info, &attestationInformationVerificationCallback);
+    revocationDelegateImpl.ClearDeviceAttestationRevocationData();
+    EXPECT_EQ(attestationResult, AttestationVerificationResult::kPaiRevoked);
+
+    // Test DAC and PAI both revoked, crl signers are PAI and PAA respectively
+    jsonData = R"(
+    [{
+        "type": "revocation_set",
+        "issuer_subject_key_id": "AF42B7094DEBD515EC6ECF33B81115225F325288",
+        "issuer_name": "MEYxGDAWBgNVBAMMD01hdHRlciBUZXN0IFBBSTEUMBIGCisGAQQBgqJ8AgEMBEZGRjExFDASBgorBgEEAYKifAICDAQ4MDAw",
+        "crl_signer_cert": "MIIB1DCCAXqgAwIBAgIIPmzmUJrYQM0wCgYIKoZIzj0EAwIwMDEYMBYGA1UEAwwPTWF0dGVyIFRlc3QgUEFBMRQwEgYKKwYBBAGConwCAQwERkZGMTAgFw0yMTA2MjgxNDIzNDNaGA85OTk5MTIzMTIzNTk1OVowRjEYMBYGA1UEAwwPTWF0dGVyIFRlc3QgUEFJMRQwEgYKKwYBBAGConwCAQwERkZGMTEUMBIGCisGAQQBgqJ8AgIMBDgwMDAwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAASA3fEbIo8+MfY7z1eY2hRiOuu96C7zeO6tv7GP4avOMdCO1LIGBLbMxtm1+rZOfeEMt0vgF8nsFRYFbXDyzQsio2YwZDASBgNVHRMBAf8ECDAGAQH/AgEAMA4GA1UdDwEB/wQEAwIBBjAdBgNVHQ4EFgQUr0K3CU3r1RXsbs8zuBEVIl8yUogwHwYDVR0jBBgwFoAUav0idx9RH+y/FkGXZxDc3DGhcX4wCgYIKoZIzj0EAwIDSAAwRQIhAJbJyM8uAYhgBdj1vHLAe3X9mldpWsSRETETi+oDPOUDAiAlVJQ75X1T1sR199I+v8/CA2zSm6Y5PsfvrYcUq3GCGQ==",
+        "revoked_serial_numbers": ["0C694F7F866067B2"]
+    },
+    {
+        "type": "revocation_set",
+        "issuer_subject_key_id": "6AFD22771F511FECBF1641976710DCDC31A1717E",
+        "issuer_name": "MDAxGDAWBgNVBAMMD01hdHRlciBUZXN0IFBBQTEUMBIGCisGAQQBgqJ8AgEMBEZGRjE=",
+        "crl_signer_cert": "MIIBvTCCAWSgAwIBAgIITqjoMYLUHBwwCgYIKoZIzj0EAwIwMDEYMBYGA1UEAwwPTWF0dGVyIFRlc3QgUEFBMRQwEgYKKwYBBAGConwCAQwERkZGMTAgFw0yMTA2MjgxNDIzNDNaGA85OTk5MTIzMTIzNTk1OVowMDEYMBYGA1UEAwwPTWF0dGVyIFRlc3QgUEFBMRQwEgYKKwYBBAGConwCAQwERkZGMTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABLbLY3KIfyko9brIGqnZOuJDHK2p154kL2UXfvnO2TKijs0Duq9qj8oYShpQNUKWDUU/MD8fGUIddR6Pjxqam3WjZjBkMBIGA1UdEwEB/wQIMAYBAf8CAQEwDgYDVR0PAQH/BAQDAgEGMB0GA1UdDgQWBBRq/SJ3H1Ef7L8WQZdnENzcMaFxfjAfBgNVHSMEGDAWgBRq/SJ3H1Ef7L8WQZdnENzcMaFxfjAKBggqhkjOPQQDAgNHADBEAiBQqoAC9NkyqaAFOPZTaK0P/8jvu8m+t9pWmDXPmqdRDgIgI7rI/g8j51RFtlM5CBpHmUkpxyqvChVI1A0DTVFLJd4=",
+        "revoked_serial_numbers": ["3E6CE6509AD840CD"]
+    }]
+    )";
+    revocationDelegateImpl.SetDeviceAttestationRevocationData(jsonData);
+    revocationDelegateImpl.CheckForRevokedDACChain(info, &attestationInformationVerificationCallback);
+    EXPECT_EQ(attestationResult, AttestationVerificationResult::kPaiAndDacRevoked);
+
+    // Test with another test DAC and PAI
+    Credentials::DeviceAttestationVerifier::AttestationInfo FFF2_8001_info(
+        ByteSpan(attestationElementsTestVector), ByteSpan(attestationChallengeTestVector), ByteSpan(attestationSignatureTestVector),
+        TestCerts::sTestCert_PAI_FFF2_8001_Cert, TestCerts::sTestCert_DAC_FFF2_8001_0008_Cert, ByteSpan(attestationNonceTestVector),
+        static_cast<VendorId>(0xFFF2), 0x8001);
+    revocationDelegateImpl.CheckForRevokedDACChain(FFF2_8001_info, &attestationInformationVerificationCallback);
+    revocationDelegateImpl.ClearDeviceAttestationRevocationData();
+    EXPECT_EQ(attestationResult, AttestationVerificationResult::kSuccess);
+
+    // Test issuer does not match
+    // crl_signer_cert is not valid and just used for testing
+    jsonData = R"(
+    [{
+        "type": "revocation_set",
+        "issuer_subject_key_id": "BF42B7094DEBD515EC6ECF33B81115225F325289",
+        "issuer_name": "MEYxGDAWBgNVBAMMD01hdHRlciBUZXN0IFBBSTEUMBIGCisGAQQBgqJ8AgEMBEZGRjExFDASBgorBgEEAYKifAICDAQ4MDAw",
+        "crl_signer_cert": "MIIBvTCCAWSgAwIBAgIITqjoMYLUHBwwCgYIKoZIzj0EAwIwMDEYMBYGA1UEAwwPTWF0dGVyIFRlc3QgUEFBMRQwEgYKKwYBBAGConwCAQwERkZGMTAgFw0yMTA2MjgxNDIzNDNaGA85OTk5MTIzMTIzNTk1OVowMDEYMBYGA1UEAwwPTWF0dGVyIFRlc3QgUEFBMRQwEgYKKwYBBAGConwCAQwERkZGMTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABLbLY3KIfyko9brIGqnZOuJDHK2p154kL2UXfvnO2TKijs0Duq9qj8oYShpQNUKWDUU/MD8fGUIddR6Pjxqam3WjZjBkMBIGA1UdEwEB/wQIMAYBAf8CAQEwDgYDVR0PAQH/BAQDAgEGMB0GA1UdDgQWBBRq/SJ3H1Ef7L8WQZdnENzcMaFxfjAfBgNVHSMEGDAWgBRq/SJ3H1Ef7L8WQZdnENzcMaFxfjAKBggqhkjOPQQDAgNHADBEAiBQqoAC9NkyqaAFOPZTaK0P/8jvu8m+t9pWmDXPmqdRDgIgI7rI/g8j51RFtlM5CBpHmUkpxyqvChVI1A0DTVFLJd4=",
+        "revoked_serial_numbers": ["0C694F7F866067B2"]
+    }]
+    )";
+    revocationDelegateImpl.SetDeviceAttestationRevocationData(jsonData);
+    revocationDelegateImpl.CheckForRevokedDACChain(info, &attestationInformationVerificationCallback);
+    revocationDelegateImpl.ClearDeviceAttestationRevocationData();
+    EXPECT_EQ(attestationResult, AttestationVerificationResult::kSuccess);
+
+    // Test subject key ID does not match
+    // crl_signer_cert is not valid and just used for testing
+    jsonData = R"(
+    [{
+        "type": "revocation_set",
+        "issuer_subject_key_id": "BF42B7094DEBD515EC6ECF33B81115225F325289",
+        "issuer_name": "MEYxGDAWBgNVBAMMD01hdHRlciBUZXN0IFBBSTEUMBIGCisGAQQBgqJ8AgEMBEZGRjExFDASBgorBgEEAYKifAICDAQ4MDAw",
+        "crl_signer_cert": "MIIBvTCCAWSgAwIBAgIITqjoMYLUHBwwCgYIKoZIzj0EAwIwMDEYMBYGA1UEAwwPTWF0dGVyIFRlc3QgUEFBMRQwEgYKKwYBBAGConwCAQwERkZGMTAgFw0yMTA2MjgxNDIzNDNaGA85OTk5MTIzMTIzNTk1OVowMDEYMBYGA1UEAwwPTWF0dGVyIFRlc3QgUEFBMRQwEgYKKwYBBAGConwCAQwERkZGMTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABLbLY3KIfyko9brIGqnZOuJDHK2p154kL2UXfvnO2TKijs0Duq9qj8oYShpQNUKWDUU/MD8fGUIddR6Pjxqam3WjZjBkMBIGA1UdEwEB/wQIMAYBAf8CAQEwDgYDVR0PAQH/BAQDAgEGMB0GA1UdDgQWBBRq/SJ3H1Ef7L8WQZdnENzcMaFxfjAfBgNVHSMEGDAWgBRq/SJ3H1Ef7L8WQZdnENzcMaFxfjAKBggqhkjOPQQDAgNHADBEAiBQqoAC9NkyqaAFOPZTaK0P/8jvu8m+t9pWmDXPmqdRDgIgI7rI/g8j51RFtlM5CBpHmUkpxyqvChVI1A0DTVFLJd4=",
+        "revoked_serial_numbers": ["0C694F7F866067B2"]
+    }]
+    )";
+    revocationDelegateImpl.SetDeviceAttestationRevocationData(jsonData);
+    revocationDelegateImpl.CheckForRevokedDACChain(info, &attestationInformationVerificationCallback);
+    revocationDelegateImpl.ClearDeviceAttestationRevocationData();
+    EXPECT_EQ(attestationResult, AttestationVerificationResult::kSuccess);
+
+    // Test serial number does not match
+    // crl_signer_cert is not valid and just used for testing
+    jsonData = R"(
+    [{
+        "type": "revocation_set",
+        "issuer_subject_key_id": "AF42B7094DEBD515EC6ECF33B81115225F325288",
+        "issuer_name": "MEYxGDAWBgNVBAMMD01hdHRlciBUZXN0IFBBSTEUMBIGCisGAQQBgqJ8AgEMBEZGRjExFDASBgorBgEEAYKifAICDAQ4MDAw",
+        "crl_signer_cert": "MIIB1DCCAXqgAwIBAgIIPmzmUJrYQM0wCgYIKoZIzj0EAwIwMDEYMBYGA1UEAwwPTWF0dGVyIFRlc3QgUEFBMRQwEgYKKwYBBAGConwCAQwERkZGMTAgFw0yMTA2MjgxNDIzNDNaGA85OTk5MTIzMTIzNTk1OVowRjEYMBYGA1UEAwwPTWF0dGVyIFRlc3QgUEFJMRQwEgYKKwYBBAGConwCAQwERkZGMTEUMBIGCisGAQQBgqJ8AgIMBDgwMDAwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAASA3fEbIo8+MfY7z1eY2hRiOuu96C7zeO6tv7GP4avOMdCO1LIGBLbMxtm1+rZOfeEMt0vgF8nsFRYFbXDyzQsio2YwZDASBgNVHRMBAf8ECDAGAQH/AgEAMA4GA1UdDwEB/wQEAwIBBjAdBgNVHQ4EFgQUr0K3CU3r1RXsbs8zuBEVIl8yUogwHwYDVR0jBBgwFoAUav0idx9RH+y/FkGXZxDc3DGhcX4wCgYIKoZIzj0EAwIDSAAwRQIhAJbJyM8uAYhgBdj1vHLAe3X9mldpWsSRETETi+oDPOUDAiAlVJQ75X1T1sR199I+v8/CA2zSm6Y5PsfvrYcUq3GCGQ==",
+        "revoked_serial_numbers": ["3E6CE6509AD840CD1", "BC694F7F866067B1"]
+    }]
+    )";
+    revocationDelegateImpl.SetDeviceAttestationRevocationData(jsonData);
+    revocationDelegateImpl.CheckForRevokedDACChain(info, &attestationInformationVerificationCallback);
+    revocationDelegateImpl.ClearDeviceAttestationRevocationData();
+    EXPECT_EQ(attestationResult, AttestationVerificationResult::kSuccess);
+
+    // Test starting serial number bytes match but not all,
+    // crl_signer_cert is not valid and just used for testing
+    jsonData = R"(
+    [{
+        "type": "revocation_set",
+        "issuer_subject_key_id": "AF42B7094DEBD515EC6ECF33B81115225F325288",
+        "issuer_name": "MEYxGDAWBgNVBAMMD01hdHRlciBUZXN0IFBBSTEUMBIGCisGAQQBgqJ8AgEMBEZGRjExFDASBgorBgEEAYKifAICDAQ4MDAw",
+        "crl_signer_cert": "MIIB1DCCAXqgAwIBAgIIPmzmUJrYQM0wCgYIKoZIzj0EAwIwMDEYMBYGA1UEAwwPTWF0dGVyIFRlc3QgUEFBMRQwEgYKKwYBBAGConwCAQwERkZGMTAgFw0yMTA2MjgxNDIzNDNaGA85OTk5MTIzMTIzNTk1OVowRjEYMBYGA1UEAwwPTWF0dGVyIFRlc3QgUEFJMRQwEgYKKwYBBAGConwCAQwERkZGMTEUMBIGCisGAQQBgqJ8AgIMBDgwMDAwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAASA3fEbIo8+MfY7z1eY2hRiOuu96C7zeO6tv7GP4avOMdCO1LIGBLbMxtm1+rZOfeEMt0vgF8nsFRYFbXDyzQsio2YwZDASBgNVHRMBAf8ECDAGAQH/AgEAMA4GA1UdDwEB/wQEAwIBBjAdBgNVHQ4EFgQUr0K3CU3r1RXsbs8zuBEVIl8yUogwHwYDVR0jBBgwFoAUav0idx9RH+y/FkGXZxDc3DGhcX4wCgYIKoZIzj0EAwIDSAAwRQIhAJbJyM8uAYhgBdj1vHLAe3X9mldpWsSRETETi+oDPOUDAiAlVJQ75X1T1sR199I+v8/CA2zSm6Y5PsfvrYcUq3GCGQ==",
+        "revoked_serial_numbers": ["0C694F7F866067B21234"]
+    }]
+    )";
+    revocationDelegateImpl.SetDeviceAttestationRevocationData(jsonData);
+    revocationDelegateImpl.CheckForRevokedDACChain(info, &attestationInformationVerificationCallback);
+    revocationDelegateImpl.ClearDeviceAttestationRevocationData();
+    EXPECT_EQ(attestationResult, AttestationVerificationResult::kSuccess);
+
+    // Test DAC is revoked, and crl signer delegator is present
+    // crl_signer_cert is not valid and just used for testing
+    jsonData = R"(
+    [{
+        "type": "revocation_set",
+        "issuer_subject_key_id": "AF42B7094DEBD515EC6ECF33B81115225F325288",
+        "issuer_name": "MEYxGDAWBgNVBAMMD01hdHRlciBUZXN0IFBBSTEUMBIGCisGAQQBgqJ8AgEMBEZGRjExFDASBgorBgEEAYKifAICDAQ4MDAw",
+        "crl_signer_cert": "MIIB1DCCAXqgAwIBAgIIPmzmUJrYQM0wCgYIKoZIzj0EAwIwMDEYMBYGA1UEAwwPTWF0dGVyIFRlc3QgUEFBMRQwEgYKKwYBBAGConwCAQwERkZGMTAgFw0yMTA2MjgxNDIzNDNaGA85OTk5MTIzMTIzNTk1OVowRjEYMBYGA1UEAwwPTWF0dGVyIFRlc3QgUEFJMRQwEgYKKwYBBAGConwCAQwERkZGMTEUMBIGCisGAQQBgqJ8AgIMBDgwMDAwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAASA3fEbIo8+MfY7z1eY2hRiOuu96C7zeO6tv7GP4avOMdCO1LIGBLbMxtm1+rZOfeEMt0vgF8nsFRYFbXDyzQsio2YwZDASBgNVHRMBAf8ECDAGAQH/AgEAMA4GA1UdDwEB/wQEAwIBBjAdBgNVHQ4EFgQUr0K3CU3r1RXsbs8zuBEVIl8yUogwHwYDVR0jBBgwFoAUav0idx9RH+y/FkGXZxDc3DGhcX4wCgYIKoZIzj0EAwIDSAAwRQIhAJbJyM8uAYhgBdj1vHLAe3X9mldpWsSRETETi+oDPOUDAiAlVJQ75X1T1sR199I+v8/CA2zSm6Y5PsfvrYcUq3GCGQ==",
+        "crl_signer_delegator": "MIIB1DCCAXqgAwIBAgIIPmzmUJrYQM0wCgYIKoZIzj0EAwIwMDEYMBYGA1UEAwwPTWF0dGVyIFRlc3QgUEFBMRQwEgYKKwYBBAGConwCAQwERkZGMTAgFw0yMTA2MjgxNDIzNDNaGA85OTk5MTIzMTIzNTk1OVowRjEYMBYGA1UEAwwPTWF0dGVyIFRlc3QgUEFJMRQwEgYKKwYBBAGConwCAQwERkZGMTEUMBIGCisGAQQBgqJ8AgIMBDgwMDAwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAASA3fEbIo8+MfY7z1eY2hRiOuu96C7zeO6tv7GP4avOMdCO1LIGBLbMxtm1+rZOfeEMt0vgF8nsFRYFbXDyzQsio2YwZDASBgNVHRMBAf8ECDAGAQH/AgEAMA4GA1UdDwEB/wQEAwIBBjAdBgNVHQ4EFgQUr0K3CU3r1RXsbs8zuBEVIl8yUogwHwYDVR0jBBgwFoAUav0idx9RH+y/FkGXZxDc3DGhcX4wCgYIKoZIzj0EAwIDSAAwRQIhAJbJyM8uAYhgBdj1vHLAe3X9mldpWsSRETETi+oDPOUDAiAlVJQ75X1T1sR199I+v8/CA2zSm6Y5PsfvrYcUq3GCGQ==",
+        "revoked_serial_numbers": ["0C694F7F866067B2"]
+    }]
+    )";
+    revocationDelegateImpl.SetDeviceAttestationRevocationData(jsonData);
+    revocationDelegateImpl.CheckForRevokedDACChain(info, &attestationInformationVerificationCallback);
+    revocationDelegateImpl.ClearDeviceAttestationRevocationData();
+    EXPECT_EQ(attestationResult, AttestationVerificationResult::kDacRevoked);
+
+    // Test with invalid crl signer cert missing begin and end cert markers
+    jsonData = R"(
+    [{
+        "type": "revocation_set",
+        "issuer_subject_key_id": "AF42B7094DEBD515EC6ECF33B81115225F325288",
+        "issuer_name": "MEYxGDAWBgNVBAMMD01hdHRlciBUZXN0IFBBSTEUMBIGCisGAQQBgqJ8AgEMBEZGRjExFDASBgorBgEEAYKifAICDAQ4MDAw",
+        "crl_signer_cert": "MIIB1DCCAXqgAwIBAgIIPmzmUJrYQM0wCgYIKoZIzj0EAwIwMDEYMBYGA1UEAwwPTWF0dGVyIFRlc3QgUEFBMRQwEgYKKwYBBAGConwCAQwERkZGMTAgFw0yMTA2MjgxNDIzNDNaGA85OTk5MTIzMTIzNTk1OVowRjEYMBYGA1UEAwwPTWF0dGVyIFRlc3QgUEFJMRQwEgYKKwYBBAGConwCAQwERkZGMTEUMBIGCisGAQQBgqJ8AgIMBDgwMDAwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAASA3fEbIo8+MfY7z1eY2hRiOuu96C7zeO6tv7GP4avOMdCO1LIGBLbMxtm1+rZOfeEMt0vgF8nsFRYFbXDyzQsio2YwZDASBgNVHRMBAf8ECDAGAQH/AgEAMA4GA1UdDwEB/wQEAwIBBjAdBgNVHQ4EFgQUr0K3CU3r1RXsbs8zuBEVIl8yUogwHwYDVR0jBBgwFoAUav0idx9RH+y/FkGXZxDc3DGhcX4wCgYIKoZIzj0EAwIDSAAwRQIhAJbJyM8uAYhgBdj1vHLAe3X9mldpWsSRETETi+oDPOUDAiAlVJQ75X1T1sR199I+v8/CA2zSm6Y5PsfvrYcUq3GCGQ=="
+        "revoked_serial_numbers": ["0C694F7F866067B2"]
+    }]
+    )";
+
+    revocationDelegateImpl.SetDeviceAttestationRevocationData(jsonData);
+    revocationDelegateImpl.CheckForRevokedDACChain(info, &attestationInformationVerificationCallback);
+    revocationDelegateImpl.ClearDeviceAttestationRevocationData();
+    EXPECT_EQ(attestationResult, AttestationVerificationResult::kSuccess);
+
+    // test with malformed crl signer certificate
+    jsonData = R"(
+    [{
+        "type": "revocation_set",
+        "issuer_subject_key_id": "AF42B7094DEBD515EC6ECF33B81115225F325288",
+        "issuer_name": "MEYxGDAWBgNVBAMMD01hdHRlciBUZXN0IFBBSTEUMBIGCisGAQQBgqJ8AgEMBEZGRjExFDASBgorBgEEAYKifAICDAQ4MDAw",
+        "crl_signer_cert": "MIIB1DCCAXqgAwIBAgIIPmzmUJrYQM0wCgYIKoZIzj0EAwIwMDEYMBYGA1UEAwwPNDIzNDNaGA85OTk5MTIzMTIzNTk1OVowRjEYMBYGA1UEAwwPTWF0dGVyIFRlc3QgUEFJMRQwEgYKKwYBBAGConwCAQwERkZGMTEUMBIGCisGAQQBgqJ8AgIMBDgwMDAwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAASA3fEbIo8+MfY7z1eY2hRiOuu96C7zeO6tv7GP4avOMdCO1LIGBLbMxtm1+rZOfeEMt0vgF8nsFRYFbXDyzQsio2YwZDASBgNVHRMBAf8ECDAGAQH/AgEAMA4GA1UdDwEB/wQEAwIBBjAdBgNVHQ4EFgQUr0K3CU3r1RXsbs8zuBEVIl8yUogwHwYDVR0jBBgwFoAUav0idx9RH+y/FkGXZxDc3DGhcX4wCgYIKoZIzj0EAwIDSAAwRQIhAJbJyM8uAYhgBdj1vHLAe3X9mldpWsSRETETi+oDPOUDAiAlVJQ75X1T1sR199I+v8/CA2zSm6Y5PsfvrYcUq3GCGQ==",
+        "revoked_serial_numbers": ["0C694F7F866067B2"]
+    }]
+    )";
+
+    revocationDelegateImpl.SetDeviceAttestationRevocationData(jsonData);
+    revocationDelegateImpl.CheckForRevokedDACChain(info, &attestationInformationVerificationCallback);
+    revocationDelegateImpl.ClearDeviceAttestationRevocationData();
+    EXPECT_EQ(attestationResult, AttestationVerificationResult::kSuccess);
 }

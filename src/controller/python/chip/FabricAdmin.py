@@ -19,7 +19,7 @@
 from __future__ import annotations
 
 import logging
-from typing import List
+from typing import List, Optional
 
 from chip import CertificateAuthority, ChipDeviceCtrl
 from chip.crypto import p256keypair
@@ -61,10 +61,11 @@ class FabricAdmin:
         LOGGER.info(f"New FabricAdmin: FabricId: 0x{self._fabricId:016X}, VendorId = 0x{self.vendorId:04X}")
 
         self._isActive = True
-        self._activeControllers = []
+        self._activeControllers: List[ChipDeviceCtrl.ChipDeviceController] = []
 
-    def NewController(self, nodeId: int = None, paaTrustStorePath: str = "",
-                      useTestCommissioner: bool = False, catTags: List[int] = [], keypair: p256keypair.P256Keypair = None):
+    def NewController(self, nodeId: Optional[int] = None, paaTrustStorePath: str = "",
+                      useTestCommissioner: bool = False, catTags: List[int] = [], keypair: p256keypair.P256Keypair = None,
+                      dacRevocationSetPath: str = ""):
         ''' Create a new chip.ChipDeviceCtrl.ChipDeviceController instance on this fabric.
 
             When vending ChipDeviceController instances on a given fabric, each controller instance
@@ -77,6 +78,8 @@ class FabricAdmin:
             paaTrustStorePath:      Path to the PAA trust store. If one isn't provided, a suitable default is selected.
             useTestCommissioner:    If a test commmisioner is to be created.
             catTags:			    A list of 32-bit CAT tags that will added to the NOC generated for this controller.
+            keypair:                A keypair to be used for the controller. If one isn't provided, a new one is generated.
+            dacRevocationSetPath:   Path to the device attestation revocation set JSON file.
         '''
         if (not (self._isActive)):
             raise RuntimeError(
@@ -106,6 +109,9 @@ class FabricAdmin:
             fabricAdmin=self,
             catTags=catTags,
             keypair=keypair)
+
+        if dacRevocationSetPath and len(dacRevocationSetPath) > 0:
+            controller.SetDACRevocationSetPath(dacRevocationSetPath)
 
         self._activeControllers.append(controller)
         return controller

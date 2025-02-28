@@ -13,18 +13,21 @@
  *    See the License for the specific language governing permissions and
  *    limitations under the License.
  */
+#include "access/SubjectDescriptor.h"
 #include <app/tests/test-interaction-model-api.h>
 
 #include <app/InteractionModelEngine.h>
 #include <app/MessageDef/AttributeReportIBs.h>
-#include <app/codegen-data-model/Instance.h>
+#include <app/data-model-provider/ActionReturnStatus.h>
 #include <app/util/basic-types.h>
 #include <app/util/mock/Constants.h>
 #include <app/util/mock/Functions.h>
+#include <data-model-providers/codegen/Instance.h>
 #include <lib/core/CHIPCore.h>
+#include <lib/core/DataModelTypes.h>
 #include <messaging/ReliableMessageContext.h>
 
-using namespace chip::app::InteractionModel;
+using namespace chip::app::DataModel;
 
 namespace chip {
 uint8_t Test::attributeDataTLV[CHIP_CONFIG_DEFAULT_UDP_MTU_SIZE];
@@ -45,56 +48,17 @@ private:
     AttributeValueEncoder & mEncoder;
 };
 
-// Used by the code in TestWriteInteraction.cpp (and generally tests that interact with the WriteHandler may need this).
-const EmberAfAttributeMetadata * GetAttributeMetadata(const ConcreteAttributePath & aConcreteClusterPath)
+class TestOnlyAttributeValueDecoderAccessor
 {
-    // Note: This test does not make use of the real attribute metadata.
-    static EmberAfAttributeMetadata stub = { .defaultValue = EmberAfDefaultOrMinMaxAttributeValue(uint32_t(0)) };
-    return &stub;
-}
+public:
+    TestOnlyAttributeValueDecoderAccessor(AttributeValueDecoder & decoder) : mDecoder(decoder) {}
 
-// Used by the code in TestWriteInteraction.cpp (and generally tests that interact with the WriteHandler may need this).
-CHIP_ERROR WriteSingleClusterData(const Access::SubjectDescriptor & aSubjectDescriptor, const ConcreteDataAttributePath & aPath,
-                                  TLV::TLVReader & aReader, WriteHandler * aWriteHandler)
-{
-    if (aPath.mDataVersion.HasValue() && aPath.mDataVersion.Value() == Test::kRejectedDataVersion)
-    {
-        return aWriteHandler->AddStatus(aPath, Protocols::InteractionModel::Status::DataVersionMismatch);
-    }
+    TLV::TLVReader & GetTlvReader() { return mDecoder.mReader; }
+    void SetTriedDecode(bool triedDecode) { mDecoder.mTriedDecode = triedDecode; }
 
-    TLV::TLVWriter writer;
-    writer.Init(chip::Test::attributeDataTLV);
-    writer.CopyElement(TLV::AnonymousTag(), aReader);
-    chip::Test::attributeDataTLVLen = writer.GetLengthWritten();
-    return aWriteHandler->AddStatus(aPath, Protocols::InteractionModel::Status::Success);
-}
-
-// Used by the code in TestAclAttribute.cpp (and generally tests that interact with the InteractionModelEngine may need this).
-bool ConcreteAttributePathExists(const ConcreteAttributePath & aPath)
-{
-    return aPath.mClusterId != Test::kTestDeniedClusterId1;
-}
-
-// Used by the code in TestAclAttribute.cpp (and generally tests that interact with the InteractionModelEngine may need this).
-Protocols::InteractionModel::Status CheckEventSupportStatus(const ConcreteEventPath & aPath)
-{
-    if (aPath.mClusterId == Test::kTestDeniedClusterId1)
-    {
-        return Protocols::InteractionModel::Status::UnsupportedCluster;
-    }
-
-    return Protocols::InteractionModel::Status::Success;
-}
-
-// strong defintion in TestCommandInteraction.cpp
-__attribute__((weak)) Protocols::InteractionModel::Status
-ServerClusterCommandExists(const ConcreteCommandPath & aRequestCommandPath)
-{
-    // Mock cluster catalog, only support commands on one cluster on one endpoint.
-    using Protocols::InteractionModel::Status;
-
-    return Status::Success;
-}
+private:
+    AttributeValueDecoder & mDecoder;
+};
 
 // strong defintion in TestCommandInteraction.cpp
 __attribute__((weak)) void DispatchSingleClusterCommand(const ConcreteCommandPath & aRequestCommandPath,
@@ -102,21 +66,9 @@ __attribute__((weak)) void DispatchSingleClusterCommand(const ConcreteCommandPat
 {}
 
 // Used by the code in TestReadInteraction.cpp (and generally tests that interact with the Reporting Engine may need this).
-bool IsClusterDataVersionEqual(const ConcreteClusterPath & aConcreteClusterPath, DataVersion aRequiredVersion)
-{
-    return (Test::kTestDataVersion1 == aRequiredVersion);
-}
-
-// Used by the code in TestReadInteraction.cpp.
-bool IsDeviceTypeOnEndpoint(DeviceTypeId deviceType, EndpointId endpoint)
-{
-    return false;
-}
-
-// Used by the code in TestReadInteraction.cpp (and generally tests that interact with the Reporting Engine may need this).
-CHIP_ERROR ReadSingleClusterData(const Access::SubjectDescriptor & aSubjectDescriptor, bool aIsFabricFiltered,
-                                 const ConcreteReadAttributePath & aPath, AttributeReportIBs::Builder & aAttributeReports,
-                                 AttributeEncodeState * apEncoderState)
+static CHIP_ERROR ReadSingleClusterData(const Access::SubjectDescriptor & aSubjectDescriptor, bool aIsFabricFiltered,
+                                        const ConcreteReadAttributePath & aPath, AttributeReportIBs::Builder & aAttributeReports,
+                                        AttributeEncodeState * apEncoderState)
 {
     if (aPath.mClusterId >= Test::kMockEndpointMin)
     {
@@ -153,12 +105,17 @@ TestImCustomDataModel & TestImCustomDataModel::Instance()
     return model;
 }
 
-CHIP_ERROR TestImCustomDataModel::ReadAttribute(const ReadAttributeRequest & request, AttributeValueEncoder & encoder)
+ActionReturnStatus TestImCustomDataModel::ReadAttribute(const ReadAttributeRequest & request, AttributeValueEncoder & encoder)
 {
     AttributeEncodeState mutableState(&encoder.GetState()); // provide a state copy to start.
 
-    CHIP_ERROR err = ReadSingleClusterData(request.subjectDescriptor.value_or(Access::SubjectDescriptor()),
-                                           request.readFlags.Has(ReadFlags::kFabricFiltered), request.path,
+    Access::SubjectDescriptor subjectDescriptor;
+    if (request.subjectDescriptor != nullptr)
+    {
+        subjectDescriptor = *request.subjectDescriptor;
+    }
+
+    CHIP_ERROR err = ReadSingleClusterData(subjectDescriptor, request.readFlags.Has(ReadFlags::kFabricFiltered), request.path,
                                            TestOnlyAttributeValueEncoderAccessor(encoder).Builder(), &mutableState);
 
     // state must survive CHIP_ERRORs as it is used for chunking
@@ -167,80 +124,29 @@ CHIP_ERROR TestImCustomDataModel::ReadAttribute(const ReadAttributeRequest & req
     return err;
 }
 
-CHIP_ERROR TestImCustomDataModel::WriteAttribute(const WriteAttributeRequest & request, AttributeValueDecoder & decoder)
+ActionReturnStatus TestImCustomDataModel::WriteAttribute(const WriteAttributeRequest & request, AttributeValueDecoder & decoder)
 {
-    return CHIP_ERROR_NOT_IMPLEMENTED;
+    if (request.path.mDataVersion.HasValue() && request.path.mDataVersion.Value() == Test::kRejectedDataVersion)
+    {
+        return CHIP_IM_GLOBAL_STATUS(DataVersionMismatch);
+    }
+
+    TestOnlyAttributeValueDecoderAccessor decodeAccess(decoder);
+
+    decodeAccess.SetTriedDecode(true);
+
+    TLV::TLVWriter writer;
+    writer.Init(chip::Test::attributeDataTLV);
+    writer.CopyElement(TLV::AnonymousTag(), decodeAccess.GetTlvReader());
+    chip::Test::attributeDataTLVLen = writer.GetLengthWritten();
+
+    return CHIP_NO_ERROR;
 }
 
-CHIP_ERROR TestImCustomDataModel::Invoke(const InvokeRequest & request, chip::TLV::TLVReader & input_arguments,
-                                         CommandHandler * handler)
+std::optional<ActionReturnStatus> TestImCustomDataModel::Invoke(const InvokeRequest & request,
+                                                                chip::TLV::TLVReader & input_arguments, CommandHandler * handler)
 {
-    return CHIP_ERROR_NOT_IMPLEMENTED;
-}
-
-EndpointId TestImCustomDataModel::FirstEndpoint()
-{
-    return CodegenDataModelInstance()->FirstEndpoint();
-}
-
-EndpointId TestImCustomDataModel::NextEndpoint(EndpointId before)
-{
-    return CodegenDataModelInstance()->NextEndpoint(before);
-}
-
-ClusterEntry TestImCustomDataModel::FirstCluster(EndpointId endpoint)
-{
-    return CodegenDataModelInstance()->FirstCluster(endpoint);
-}
-
-ClusterEntry TestImCustomDataModel::NextCluster(const ConcreteClusterPath & before)
-{
-    return CodegenDataModelInstance()->NextCluster(before);
-}
-
-std::optional<ClusterInfo> TestImCustomDataModel::GetClusterInfo(const ConcreteClusterPath & path)
-{
-    return CodegenDataModelInstance()->GetClusterInfo(path);
-}
-
-AttributeEntry TestImCustomDataModel::FirstAttribute(const ConcreteClusterPath & cluster)
-{
-    return CodegenDataModelInstance()->FirstAttribute(cluster);
-}
-
-AttributeEntry TestImCustomDataModel::NextAttribute(const ConcreteAttributePath & before)
-{
-    return CodegenDataModelInstance()->NextAttribute(before);
-}
-
-std::optional<AttributeInfo> TestImCustomDataModel::GetAttributeInfo(const ConcreteAttributePath & path)
-{
-    return CodegenDataModelInstance()->GetAttributeInfo(path);
-}
-
-CommandEntry TestImCustomDataModel::FirstAcceptedCommand(const ConcreteClusterPath & cluster)
-{
-    return CodegenDataModelInstance()->FirstAcceptedCommand(cluster);
-}
-
-CommandEntry TestImCustomDataModel::NextAcceptedCommand(const ConcreteCommandPath & before)
-{
-    return CodegenDataModelInstance()->NextAcceptedCommand(before);
-}
-
-std::optional<CommandInfo> TestImCustomDataModel::GetAcceptedCommandInfo(const ConcreteCommandPath & path)
-{
-    return CodegenDataModelInstance()->GetAcceptedCommandInfo(path);
-}
-
-ConcreteCommandPath TestImCustomDataModel::FirstGeneratedCommand(const ConcreteClusterPath & cluster)
-{
-    return CodegenDataModelInstance()->FirstGeneratedCommand(cluster);
-}
-
-ConcreteCommandPath TestImCustomDataModel::NextGeneratedCommand(const ConcreteCommandPath & before)
-{
-    return CodegenDataModelInstance()->NextGeneratedCommand(before);
+    return std::make_optional<ActionReturnStatus>(CHIP_ERROR_NOT_IMPLEMENTED);
 }
 
 } // namespace app

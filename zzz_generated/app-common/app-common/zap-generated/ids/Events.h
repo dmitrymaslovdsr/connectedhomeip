@@ -36,6 +36,10 @@ namespace AccessControlExtensionChanged {
 static constexpr EventId Id = 0x00000001;
 } // namespace AccessControlExtensionChanged
 
+namespace FabricRestrictionReviewUpdate {
+static constexpr EventId Id = 0x00000002;
+} // namespace FabricRestrictionReviewUpdate
+
 } // namespace Events
 } // namespace AccessControl
 
@@ -435,6 +439,20 @@ static constexpr EventId Id = 0x00000001;
 } // namespace Events
 } // namespace ElectricalEnergyMeasurement
 
+namespace WaterHeaterManagement {
+namespace Events {
+
+namespace BoostStarted {
+static constexpr EventId Id = 0x00000000;
+} // namespace BoostStarted
+
+namespace BoostEnded {
+static constexpr EventId Id = 0x00000001;
+} // namespace BoostEnded
+
+} // namespace Events
+} // namespace WaterHeaterManagement
+
 namespace DemandResponseLoadControl {
 namespace Events {
 
@@ -615,6 +633,16 @@ static constexpr EventId Id = 0x00000010;
 } // namespace Events
 } // namespace PumpConfigurationAndControl
 
+namespace OccupancySensing {
+namespace Events {
+
+namespace OccupancyChanged {
+static constexpr EventId Id = 0x00000000;
+} // namespace OccupancyChanged
+
+} // namespace Events
+} // namespace OccupancySensing
+
 namespace TargetNavigator {
 namespace Events {
 
@@ -654,6 +682,52 @@ static constexpr EventId Id = 0x00000000;
 
 } // namespace Events
 } // namespace ContentControl
+
+namespace ZoneManagement {
+namespace Events {
+
+namespace ZoneTriggered {
+static constexpr EventId Id = 0x00000000;
+} // namespace ZoneTriggered
+
+namespace ZoneStopped {
+static constexpr EventId Id = 0x00000001;
+} // namespace ZoneStopped
+
+} // namespace Events
+} // namespace ZoneManagement
+
+namespace CameraAvStreamManagement {
+namespace Events {
+
+namespace VideoStreamChanged {
+static constexpr EventId Id = 0x00000000;
+} // namespace VideoStreamChanged
+
+namespace AudioStreamChanged {
+static constexpr EventId Id = 0x00000001;
+} // namespace AudioStreamChanged
+
+namespace SnapshotStreamChanged {
+static constexpr EventId Id = 0x00000002;
+} // namespace SnapshotStreamChanged
+
+} // namespace Events
+} // namespace CameraAvStreamManagement
+
+namespace PushAvStreamTransport {
+namespace Events {
+
+namespace PushTransportBegin {
+static constexpr EventId Id = 0x00000000;
+} // namespace PushTransportBegin
+
+namespace PushTransportEnd {
+static constexpr EventId Id = 0x00000001;
+} // namespace PushTransportEnd
+
+} // namespace Events
+} // namespace PushAvStreamTransport
 
 namespace CommissionerControl {
 namespace Events {

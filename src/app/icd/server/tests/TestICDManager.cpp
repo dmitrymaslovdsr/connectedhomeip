@@ -16,10 +16,12 @@
  *    limitations under the License.
  */
 
+#include <app-common/zap-generated/cluster-enums.h>
 #include <pw_unit_test/framework.h>
 
 #include <app/SubscriptionsInfoProvider.h>
 #include <app/TestEventTriggerDelegate.h>
+#include <app/icd/server/DefaultICDCheckInBackOffStrategy.h>
 #include <app/icd/server/ICDConfigurationData.h>
 #include <app/icd/server/ICDManager.h>
 #include <app/icd/server/ICDMonitoringTable.h>
@@ -121,6 +123,7 @@ public:
 
     bool SubjectHasActiveSubscription(FabricIndex aFabricIndex, NodeId subject) { return mHasActiveSubscription; };
     bool SubjectHasPersistedSubscription(FabricIndex aFabricIndex, NodeId subject) { return mHasPersistedSubscription; };
+    bool FabricHasAtLeastOneActiveSubscription(FabricIndex aFabricIndex) { return false; };
 
 private:
     bool mHasActiveSubscription    = false;
@@ -197,7 +200,16 @@ public:
 
         mICDStateObserver.ResetAll();
         mICDManager.RegisterObserver(&mICDStateObserver);
-        mICDManager.Init(&testStorage, &GetFabricTable(), &mKeystore, &GetExchangeManager(), &mSubInfoProvider);
+
+#if CHIP_CONFIG_ENABLE_ICD_CIP
+        mICDManager.SetPersistentStorageDelegate(&testStorage)
+            .SetFabricTable(&GetFabricTable())
+            .SetSymmetricKeyStore(&mKeystore)
+            .SetExchangeManager(&GetExchangeManager())
+            .SetSubscriptionsInfoProvider(&mSubInfoProvider)
+            .SetICDCheckInBackOffStrategy(&mStrategy);
+#endif // CHIP_CONFIG_ENABLE_ICD_CIP
+        mICDManager.Init();
     }
 
     // Performs teardown for each individual test in the test suite
@@ -212,6 +224,7 @@ public:
     TestSubscriptionsInfoProvider mSubInfoProvider;
     TestPersistentStorageDelegate testStorage;
     TestICDStateObserver mICDStateObserver;
+    DefaultICDCheckInBackOffStrategy mStrategy;
 };
 
 TEST_F(TestICDManager, TestICDModeDurations)
@@ -249,8 +262,10 @@ TEST_F(TestICDManager, TestICDModeDurationsWith0ActiveModeDurationWithoutActiveS
     ICDConfigurationData & icdConfigData = ICDConfigurationData::GetInstance();
     ICDConfigurationDataTestAccess privateIcdConfigData(&icdConfigData);
 
-    // Set FeatureMap - Configures CIP, UAT and LITS to 1
-    mICDManager.SetTestFeatureMapValue(0x07);
+    using Feature = Clusters::IcdManagement::Feature;
+    BitFlags<Feature> featureMap;
+    featureMap.Set(Feature::kLongIdleTimeSupport).Set(Feature::kUserActiveModeTrigger).Set(Feature::kCheckInProtocolSupport);
+    privateIcdConfigData.SetFeatureMap(featureMap);
 
     // Set that there are no matching subscriptions
     mSubInfoProvider.SetHasActiveSubscription(false);
@@ -329,8 +344,10 @@ TEST_F(TestICDManager, TestICDModeDurationsWith0ActiveModeDurationWithActiveSub)
     ICDConfigurationData & icdConfigData = ICDConfigurationData::GetInstance();
     ICDConfigurationDataTestAccess privateIcdConfigData(&icdConfigData);
 
-    // Set FeatureMap - Configures CIP, UAT and LITS to 1
-    mICDManager.SetTestFeatureMapValue(0x07);
+    using Feature = Clusters::IcdManagement::Feature;
+    BitFlags<Feature> featureMap;
+    featureMap.Set(Feature::kLongIdleTimeSupport).Set(Feature::kUserActiveModeTrigger).Set(Feature::kCheckInProtocolSupport);
+    privateIcdConfigData.SetFeatureMap(featureMap);
 
     // Set that there are not matching subscriptions
     mSubInfoProvider.SetHasActiveSubscription(true);
@@ -468,10 +485,12 @@ TEST_F(TestICDManager, TestICDMRegisterUnregisterEvents)
 {
     typedef ICDListener::ICDManagementEvents ICDMEvent;
     ICDNotifier notifier = ICDNotifier::GetInstance();
+    ICDConfigurationDataTestAccess privateIcdConfigData(&ICDConfigurationData::GetInstance());
 
-    // Set FeatureMap
-    // Configures CIP, UAT and LITS to 1
-    mICDManager.SetTestFeatureMapValue(0x07);
+    using Feature = Clusters::IcdManagement::Feature;
+    BitFlags<Feature> featureMap;
+    featureMap.Set(Feature::kLongIdleTimeSupport).Set(Feature::kUserActiveModeTrigger).Set(Feature::kCheckInProtocolSupport);
+    privateIcdConfigData.SetFeatureMap(featureMap);
 
     // Check ICDManager starts in SIT mode if no entries are present
     EXPECT_EQ(ICDConfigurationData::GetInstance().GetICDMode(), ICDConfigurationData::ICDMode::SIT);
@@ -568,7 +587,16 @@ TEST_F(TestICDManager, TestICDCounter)
 
     // Shut down and reinit ICDManager to increment counter
     mICDManager.Shutdown();
-    mICDManager.Init(&(testStorage), &GetFabricTable(), &(mKeystore), &GetExchangeManager(), &(mSubInfoProvider));
+#if CHIP_CONFIG_ENABLE_ICD_CIP
+    mICDManager.SetPersistentStorageDelegate(&testStorage)
+        .SetFabricTable(&GetFabricTable())
+        .SetSymmetricKeyStore(&mKeystore)
+        .SetExchangeManager(&GetExchangeManager())
+        .SetSubscriptionsInfoProvider(&mSubInfoProvider)
+        .SetICDCheckInBackOffStrategy(&mStrategy);
+#endif // CHIP_CONFIG_ENABLE_ICD_CIP
+    mICDManager.Init();
+
     mICDManager.RegisterObserver(&(mICDStateObserver));
 
     EXPECT_EQ(counter + ICDConfigurationData::kICDCounterPersistenceIncrement,
@@ -674,6 +702,69 @@ TEST_F(TestICDManager, TestICDMStayActive)
     // confirm the promised time is 20000 since the device is already planing to stay active longer than the requested time
     EXPECT_EQ(stayActivePromisedMs, 20000UL);
 }
+
+#if CHIP_CONFIG_ENABLE_ICD_DSLS
+/**
+ * @brief Test verifies the logic of the ICDManager related to DSLS (Dynamic SIT LIT Support)
+ */
+TEST_F(TestICDManager, TestICDMDSLS)
+{
+    typedef ICDListener::ICDManagementEvents ICDMEvent;
+    ICDNotifier notifier = ICDNotifier::GetInstance();
+    ICDConfigurationDataTestAccess privateIcdConfigData(&ICDConfigurationData::GetInstance());
+
+    using Feature = Clusters::IcdManagement::Feature;
+    BitFlags<Feature> featureMap;
+    featureMap.Set(Feature::kLongIdleTimeSupport)
+        .Set(Feature::kUserActiveModeTrigger)
+        .Set(Feature::kCheckInProtocolSupport)
+        .Set(Feature::kDynamicSitLitSupport);
+    privateIcdConfigData.SetFeatureMap(featureMap);
+
+    // Check ICDManager starts in SIT mode if no entries are present
+    EXPECT_EQ(ICDConfigurationData::GetInstance().GetICDMode(), ICDConfigurationData::ICDMode::SIT);
+
+    // Create table with one fabric
+    ICDMonitoringTable table1(testStorage, kTestFabricIndex1, kMaxTestClients, &(mKeystore));
+
+    // Add an entry to the fabric
+    ICDMonitoringEntry entry1(&(mKeystore));
+    entry1.checkInNodeID    = kClientNodeId11;
+    entry1.monitoredSubject = kClientNodeId12;
+    EXPECT_EQ(CHIP_NO_ERROR, entry1.SetKey(ByteSpan(kKeyBuffer1a)));
+    EXPECT_EQ(CHIP_NO_ERROR, table1.Set(0, entry1));
+
+    // Trigger register event after first entry was added
+    notifier.NotifyICDManagementEvent(ICDMEvent::kTableUpdated);
+
+    // Check ICDManager is now in the LIT operating mode
+    EXPECT_EQ(ICDConfigurationData::GetInstance().GetICDMode(), ICDConfigurationData::ICDMode::LIT);
+
+    // Simulate SIT Mode Request - device must switch to SIT mode even if there is a client registered
+    notifier.NotifySITModeRequestNotification();
+
+    // Check ICDManager is now in the SIT operating mode
+    EXPECT_EQ(ICDConfigurationData::GetInstance().GetICDMode(), ICDConfigurationData::ICDMode::SIT);
+
+    // Advance time so active mode interval expires.
+    AdvanceClockAndRunEventLoop(ICDConfigurationData::GetInstance().GetActiveModeDuration() + 1_ms32);
+
+    // Check ICDManager is still in the SIT operating mode
+    EXPECT_EQ(ICDConfigurationData::GetInstance().GetICDMode(), ICDConfigurationData::ICDMode::SIT);
+
+    // Withdraw SIT mode
+    notifier.NotifySITModeRequestWithdrawal();
+
+    // Check ICDManager is now in the LIT operating mode
+    EXPECT_EQ(ICDConfigurationData::GetInstance().GetICDMode(), ICDConfigurationData::ICDMode::LIT);
+
+    // Advance time so active mode interval expires.
+    AdvanceClockAndRunEventLoop(ICDConfigurationData::GetInstance().GetActiveModeDuration() + 1_ms32);
+
+    // Check ICDManager is still in the LIT operating mode
+    EXPECT_EQ(ICDConfigurationData::GetInstance().GetICDMode(), ICDConfigurationData::ICDMode::LIT);
+}
+#endif // CHIP_CONFIG_ENABLE_ICD_DSLS
 
 #if CHIP_CONFIG_ENABLE_ICD_CIP
 #if CHIP_CONFIG_PERSIST_SUBSCRIPTIONS
@@ -909,9 +1000,12 @@ TEST_F(TestICDManager, TestICDStateObserverOnEnterActiveMode)
 TEST_F(TestICDManager, TestICDStateObserverOnICDModeChange)
 {
     typedef ICDListener::ICDManagementEvents ICDMEvent;
+    ICDConfigurationDataTestAccess privateIcdConfigData(&ICDConfigurationData::GetInstance());
 
-    // Set FeatureMap - Configures CIP, UAT and LITS to 1
-    mICDManager.SetTestFeatureMapValue(0x07);
+    using Feature = Clusters::IcdManagement::Feature;
+    BitFlags<Feature> featureMap;
+    featureMap.Set(Feature::kLongIdleTimeSupport).Set(Feature::kUserActiveModeTrigger).Set(Feature::kCheckInProtocolSupport);
+    privateIcdConfigData.SetFeatureMap(featureMap);
 
     // Since we don't have a registration, we stay in SIT mode. No changes
     EXPECT_FALSE(mICDStateObserver.mOnICDModeChangeCalled);
@@ -955,8 +1049,12 @@ TEST_F(TestICDManager, TestICDStateObserverOnICDModeChange)
 
 TEST_F(TestICDManager, TestICDStateObserverOnICDModeChangeOnInit)
 {
-    // Set FeatureMap - Configures CIP, UAT and LITS to 1
-    mICDManager.SetTestFeatureMapValue(0x07);
+    ICDConfigurationDataTestAccess privateIcdConfigData(&ICDConfigurationData::GetInstance());
+
+    using Feature = Clusters::IcdManagement::Feature;
+    BitFlags<Feature> featureMap;
+    featureMap.Set(Feature::kLongIdleTimeSupport).Set(Feature::kUserActiveModeTrigger).Set(Feature::kCheckInProtocolSupport);
+    privateIcdConfigData.SetFeatureMap(featureMap);
 
     ICDMonitoringTable table(testStorage, kTestFabricIndex1, kMaxTestClients, &(mKeystore));
 
@@ -973,7 +1071,15 @@ TEST_F(TestICDManager, TestICDStateObserverOnICDModeChangeOnInit)
     // Shut down and reinit ICDManager - We should go to LIT mode since we have a registration
     mICDManager.Shutdown();
     mICDManager.RegisterObserver(&(mICDStateObserver));
-    mICDManager.Init(&testStorage, &GetFabricTable(), &mKeystore, &GetExchangeManager(), &mSubInfoProvider);
+#if CHIP_CONFIG_ENABLE_ICD_CIP
+    mICDManager.SetPersistentStorageDelegate(&testStorage)
+        .SetFabricTable(&GetFabricTable())
+        .SetSymmetricKeyStore(&mKeystore)
+        .SetExchangeManager(&GetExchangeManager())
+        .SetSubscriptionsInfoProvider(&mSubInfoProvider)
+        .SetICDCheckInBackOffStrategy(&mStrategy);
+#endif // CHIP_CONFIG_ENABLE_ICD_CIP
+    mICDManager.Init();
 
     // We have a registration, transition to LIT mode
     EXPECT_TRUE(mICDStateObserver.mOnICDModeChangeCalled);

@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <!--
-Copyright (C) Connectivity Standards Alliance (2021). All rights reserved.
+Copyright (C) Connectivity Standards Alliance (2025). All rights reserved.
 The information within this document is the property of the Connectivity
 Standards Alliance and its use and disclosure are restricted, except as
 expressly set forth herein.
@@ -59,7 +59,7 @@ Davis, CA 95616, USA
 -->
 <cluster xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="types types.xsd cluster cluster.xsd" id="0x0510" name="Content App Observer Cluster" revision="1">
   <revisionHistory>
-    <revision revision="1" summary="Initial Release"/>
+    <revision revision="1" summary="Initial revision"/>
   </revisionHistory>
   <clusterIds>
     <clusterId id="0x0510" name="Content App Observer"/>
@@ -81,11 +81,15 @@ Davis, CA 95616, USA
       <mandatoryConform/>
       <field id="0" name="Data" type="string">
         <mandatoryConform/>
-        <constraint type="maxLength" value="500"/>
+        <constraint>
+          <maxLength value="500"/>
+        </constraint>
       </field>
       <field id="1" name="EncodingHint" type="string">
         <optionalConform/>
-        <constraint type="maxLength" value="100"/>
+        <constraint>
+          <maxLength value="100"/>
+        </constraint>
       </field>
     </command>
     <command id="0x01" name="ContentAppMessageResponse" direction="responseFromServer">
@@ -95,11 +99,15 @@ Davis, CA 95616, USA
       </field>
       <field id="1" name="Data" type="string">
         <optionalConform/>
-        <constraint type="maxLength" value="500"/>
+        <constraint>
+          <maxLength value="500"/>
+        </constraint>
       </field>
       <field id="2" name="EncodingHint" type="string">
         <optionalConform/>
-        <constraint type="maxLength" value="100"/>
+        <constraint>
+          <maxLength value="100"/>
+        </constraint>
       </field>
     </command>
   </commands>

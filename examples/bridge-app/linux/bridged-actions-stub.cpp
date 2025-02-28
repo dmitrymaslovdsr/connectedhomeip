@@ -131,7 +131,7 @@ CHIP_ERROR ActionsAttrAccess::Read(const ConcreteReadAttributePath & aPath, Attr
 }
 } // anonymous namespace
 
-void MatterActionsPluginServerInitCallback()
+void emberAfActionsClusterInitCallback(EndpointId endpoint)
 {
-    registerAttributeAccessOverride(&gAttrAccess);
+    AttributeAccessInterfaceRegistry::Instance().Register(&gAttrAccess);
 }

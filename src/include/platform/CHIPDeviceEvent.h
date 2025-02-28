@@ -281,7 +281,9 @@ enum InternalEventTypes
      * This event should populate CHIPoBLEConnectionError structure.
      */
     kCHIPoBLEConnectionError,
-    kCHIPoBLENotifyConfirm
+    kCHIPoBLENotifyConfirm,
+    kCHIPoWiFiPAFWriteReceived,
+    kCHIPoWiFiPAFConnected,
 };
 
 static_assert(kEventTypeNotSet == 0, "kEventTypeNotSet must be defined as 0");
@@ -379,7 +381,10 @@ typedef void (*AsyncWorkFunct)(intptr_t arg);
 #include CHIPDEVICEPLATFORMEVENT_HEADER
 #endif // defined(CHIP_DEVICE_LAYER_TARGET)
 
+#if CONFIG_NETWORK_LAYER_BLE
 #include <ble/Ble.h>
+#endif
+
 #include <inet/InetInterface.h>
 #include <lib/support/LambdaBridge.h>
 #include <system/SystemEvent.h>
@@ -465,6 +470,7 @@ struct ChipDeviceEvent final
             uint8_t SessionType;
             bool IsCommissioner;
         } SessionEstablished;
+#if CONFIG_NETWORK_LAYER_BLE && BLE_USES_DEVICE_EVENTS
         struct
         {
             BLE_CONNECTION_OBJECT ConId;
@@ -491,6 +497,13 @@ struct ChipDeviceEvent final
         {
             BLE_CONNECTION_OBJECT ConId;
         } CHIPoBLENotifyConfirm;
+#endif // CONFIG_NETWORK_LAYER_BLE && BLE_USES_DEVICE_EVENTS
+#if CHIP_DEVICE_CONFIG_ENABLE_WIFIPAF
+        struct
+        {
+            chip::System::PacketBuffer * Data;
+        } CHIPoWiFiPAFWriteReceived;
+#endif
         struct
         {
             bool RoleChanged : 1;
@@ -526,6 +539,7 @@ struct ChipDeviceEvent final
             FabricIndex fabricIndex;
             bool addNocCommandHasBeenInvoked;
             bool updateNocCommandHasBeenInvoked;
+            bool updateTermsAndConditionsHasBeenInvoked;
         } FailSafeTimerExpired;
 
         struct

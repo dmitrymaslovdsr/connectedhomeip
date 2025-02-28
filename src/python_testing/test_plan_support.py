@@ -25,6 +25,14 @@ def read_attribute(attribute: str, cluster: typing.Optional[str] = None):
         return attr
 
 
+def send_command(command: str, cluster: typing.Optional[str] = None):
+    cmd = f"sends the {command} command"
+    if cluster:
+        return f'{cmd} from {cluster}'
+    else:
+        return cmd
+
+
 def save_as(val: str) -> str:
     return f' and saves the value as {val}'
 
@@ -76,3 +84,7 @@ def remove_fabric(index_var: str, controller: str):
 
 def verify_commissioning_successful() -> str:
     return 'Verify the commissioning is successful.'
+
+
+def if_feature_supported(feature: str) -> str:
+    return f"If the {feature} is supported"

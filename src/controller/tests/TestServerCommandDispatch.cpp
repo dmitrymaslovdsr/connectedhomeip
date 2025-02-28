@@ -15,13 +15,6 @@
  *    See the License for the specific language governing permissions and
  *    limitations under the License.
  */
-
-/**
- *    @file
- *      This file implements unit tests for CHIP Interaction Model Command Interaction
- *
- */
-
 #include <pw_unit_test/framework.h>
 
 #include <app-common/zap-generated/cluster-objects.h>
@@ -34,6 +27,10 @@
 #include <app/util/attribute-storage.h>
 #include <controller/InvokeInteraction.h>
 #include <controller/ReadInteraction.h>
+#include <data-model-providers/codegen/CodegenDataModelProvider.h>
+#include <data-model-providers/codegen/Instance.h>
+#include <lib/core/CHIPError.h>
+#include <lib/core/DataModelTypes.h>
 #include <lib/core/ErrorStr.h>
 #include <lib/core/StringBuilderAdapters.h>
 #include <lib/support/logging/CHIPLogging.h>
@@ -62,10 +59,10 @@ class TestClusterCommandHandler : public chip::app::CommandHandlerInterface
 public:
     TestClusterCommandHandler() : chip::app::CommandHandlerInterface(Optional<EndpointId>::Missing(), Clusters::UnitTesting::Id)
     {
-        CommandHandlerInterfaceRegistry::RegisterCommandHandler(this);
+        CommandHandlerInterfaceRegistry::Instance().RegisterCommandHandler(this);
     }
 
-    ~TestClusterCommandHandler() { CommandHandlerInterfaceRegistry::UnregisterCommandHandler(this); }
+    ~TestClusterCommandHandler() { CommandHandlerInterfaceRegistry::Instance().UnregisterCommandHandler(this); }
 
     void OverrideAcceptedCommands() { mOverrideAcceptedCommands = true; }
     void ClaimNoCommands() { mClaimNoCommands = true; }
@@ -129,9 +126,51 @@ CHIP_ERROR TestClusterCommandHandler::EnumerateAcceptedCommands(const ConcreteCl
 
 namespace {
 
+// TODO:(#36837) implementing its own provider instead of using "CodegenDataModelProvider"
+// TestServerCommandDispatch should provide its own dedicated data model provider rather than using CodegenDataModelProvider
+// provider. This class exists solely for one specific test scenario, on a temporary basis.
+class DispatchTestDataModel : public CodegenDataModelProvider
+{
+public:
+    static DispatchTestDataModel & Instance()
+    {
+        static DispatchTestDataModel instance;
+        return instance;
+    }
+
+    // The Startup method initializes the data model provider with a given context.
+    // This approach ensures that the test relies on a more controlled and explicit data model provider
+    // rather than depending on the code-generated one with undefined modifications.
+    CHIP_ERROR Startup(DataModel::InteractionModelContext context) override
+    {
+        ReturnErrorOnFailure(CodegenDataModelProvider::Startup(context));
+        return CHIP_NO_ERROR;
+    }
+
+protected:
+    // Since the current unit tests do not involve any cluster implementations, we override InitDataModelForTesting
+    // to do nothing, thereby preventing calls to the Ember-specific InitDataModelHandler.
+    void InitDataModelForTesting() override {}
+};
+
 class TestServerCommandDispatch : public chip::Test::AppContext
 {
+public:
+    void SetUp()
+    {
+        AppContext::SetUp();
+        mOldProvider = InteractionModelEngine::GetInstance()->SetDataModelProvider(&DispatchTestDataModel::Instance());
+    }
+
+    void TearDown()
+    {
+        InteractionModelEngine::GetInstance()->SetDataModelProvider(mOldProvider);
+        AppContext::TearDown();
+    }
+
 protected:
+    chip::app::DataModel::Provider * mOldProvider = nullptr;
+
     void TestDataResponseHelper(const EmberAfEndpointType * aEndpoint, bool aExpectSuccess);
 };
 
@@ -240,7 +279,7 @@ void TestServerCommandDispatch::TestDataResponseHelper(const EmberAfEndpointType
     //
     // All our endpoints have the same number of clusters, so just pick one.
     //
-    DataVersion dataVersionStorage[ArraySize(testEndpointClusters1)];
+    DataVersion dataVersionStorage[MATTER_ARRAY_SIZE(testEndpointClusters1)];
     emberAfSetDynamicEndpoint(0, kTestEndpointId, aEndpoint, Span<DataVersion>(dataVersionStorage));
 
     // Passing of stack variables by reference is only safe because of synchronous completion of the interaction. Otherwise, it's

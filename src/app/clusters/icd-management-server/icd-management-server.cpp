@@ -20,11 +20,14 @@
 #include <access/AccessControl.h>
 #include <access/Privilege.h>
 #include <app-common/zap-generated/attributes/Accessors.h>
+#include <app-common/zap-generated/cluster-enums.h>
 #include <app-common/zap-generated/cluster-objects.h>
 #include <app-common/zap-generated/ids/Clusters.h>
 #include <app/AttributeAccessInterface.h>
 #include <app/AttributeAccessInterfaceRegistry.h>
-#include <app/icd/server/ICDNotifier.h>
+#if CHIP_CONFIG_ENABLE_ICD_CIP
+#include <app/icd/server/ICDNotifier.h> // nogncheck
+#endif
 #include <app/server/Server.h>
 #include <app/util/attribute-storage.h>
 
@@ -64,11 +67,25 @@ private:
     CHIP_ERROR ReadIdleModeDuration(EndpointId endpoint, AttributeValueEncoder & encoder);
     CHIP_ERROR ReadActiveModeDuration(EndpointId endpoint, AttributeValueEncoder & encoder);
     CHIP_ERROR ReadActiveModeThreshold(EndpointId endpoint, AttributeValueEncoder & encoder);
+    CHIP_ERROR ReadFeatureMap(EndpointId endpoint, AttributeValueEncoder & encoder)
+    {
+        return encoder.Encode(mICDConfigurationData->GetFeatureMap());
+    }
+
+#if CHIP_CONFIG_ENABLE_ICD_LIT
+    CHIP_ERROR ReadOperatingMode(EndpointId endpoint, AttributeValueEncoder & encoder)
+    {
+        return mICDConfigurationData->GetICDMode() == ICDConfigurationData::ICDMode::SIT
+            ? encoder.Encode(IcdManagement::OperatingModeEnum::kSit)
+            : encoder.Encode(IcdManagement::OperatingModeEnum::kLit);
+    }
+#endif // CHIP_CONFIG_ENABLE_ICD_LIT
 
 #if CHIP_CONFIG_ENABLE_ICD_CIP
     CHIP_ERROR ReadRegisteredClients(EndpointId endpoint, AttributeValueEncoder & encoder);
     CHIP_ERROR ReadICDCounter(EndpointId endpoint, AttributeValueEncoder & encoder);
     CHIP_ERROR ReadClientsSupportedPerFabric(EndpointId endpoint, AttributeValueEncoder & encoder);
+    CHIP_ERROR ReadMaximumCheckInBackOff(EndpointId endpoint, AttributeValueEncoder & encoder);
 
     PersistentStorageDelegate * mStorage           = nullptr;
     Crypto::SymmetricKeystore * mSymmetricKeystore = nullptr;
@@ -93,6 +110,12 @@ CHIP_ERROR IcdManagementAttributeAccess::Read(const ConcreteReadAttributePath & 
     case IcdManagement::Attributes::ActiveModeThreshold::Id:
         return ReadActiveModeThreshold(aPath.mEndpointId, aEncoder);
 
+    case IcdManagement::Attributes::FeatureMap::Id:
+        return ReadFeatureMap(aPath.mEndpointId, aEncoder);
+#if CHIP_CONFIG_ENABLE_ICD_LIT
+    case IcdManagement::Attributes::OperatingMode::Id:
+        return ReadOperatingMode(aPath.mEndpointId, aEncoder);
+#endif // CHIP_CONFIG_ENABLE_ICD_LIT
 #if CHIP_CONFIG_ENABLE_ICD_CIP
     case IcdManagement::Attributes::RegisteredClients::Id:
         return ReadRegisteredClients(aPath.mEndpointId, aEncoder);
@@ -102,6 +125,9 @@ CHIP_ERROR IcdManagementAttributeAccess::Read(const ConcreteReadAttributePath & 
 
     case IcdManagement::Attributes::ClientsSupportedPerFabric::Id:
         return ReadClientsSupportedPerFabric(aPath.mEndpointId, aEncoder);
+
+    case IcdManagement::Attributes::MaximumCheckInBackOff::Id:
+        return ReadMaximumCheckInBackOff(aPath.mEndpointId, aEncoder);
 #endif // CHIP_CONFIG_ENABLE_ICD_CIP
     }
 
@@ -221,6 +247,11 @@ CHIP_ERROR IcdManagementAttributeAccess::ReadClientsSupportedPerFabric(EndpointI
     return encoder.Encode(mICDConfigurationData->GetClientsSupportedPerFabric());
 }
 
+CHIP_ERROR IcdManagementAttributeAccess::ReadMaximumCheckInBackOff(EndpointId endpoint, AttributeValueEncoder & encoder)
+{
+    return encoder.Encode(mICDConfigurationData->GetMaximumCheckInBackoff().count());
+}
+
 /**
  * @brief Function checks if the client has admin permissions to the cluster in the commandPath
  *
@@ -231,7 +262,10 @@ CHIP_ERROR IcdManagementAttributeAccess::ReadClientsSupportedPerFabric(EndpointI
  */
 CHIP_ERROR CheckAdmin(CommandHandler * commandObj, const ConcreteCommandPath & commandPath, bool & isClientAdmin)
 {
-    RequestPath requestPath{ .cluster = commandPath.mClusterId, .endpoint = commandPath.mEndpointId };
+    RequestPath requestPath{ .cluster     = commandPath.mClusterId,
+                             .endpoint    = commandPath.mEndpointId,
+                             .requestType = RequestType::kCommandInvokeRequest,
+                             .entityId    = commandPath.mCommandId };
     CHIP_ERROR err = GetAccessControl().Check(commandObj->GetSubjectDescriptor(), requestPath, Privilege::kAdminister);
     if (CHIP_NO_ERROR == err)
     {
@@ -432,6 +466,7 @@ bool emberAfIcdManagementClusterUnregisterClientCallback(CommandHandler * comman
 bool emberAfIcdManagementClusterStayActiveRequestCallback(CommandHandler * commandObj, const ConcreteCommandPath & commandPath,
                                                           const Commands::StayActiveRequest::DecodableType & commandData)
 {
+// TODO(#32321): Remove #if after issue is resolved
 // Note: We only need this #if statement for platform examples that enable the ICD management server without building the sample
 // as an ICD. Since this is not spec compliant, we should remove this #if statement once we stop compiling the ICD management
 // server in those examples.
@@ -458,7 +493,7 @@ void MatterIcdManagementPluginServerInitCallback()
 
     // Configure and register Attribute Access Override
     gAttribute.Init(storage, symmetricKeystore, fabricTable, icdConfigurationData);
-    registerAttributeAccessOverride(&gAttribute);
+    AttributeAccessInterfaceRegistry::Instance().Register(&gAttribute);
 
     // Configure ICD Management
     ICDManagementServer::Init(storage, symmetricKeystore, icdConfigurationData);
